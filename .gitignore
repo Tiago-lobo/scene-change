@@ -1,4 +1,7 @@
 __pycache__/
 .venv/
+.venv312/
 .DS_Store
 CLAUDE.md
+out/
+data/semantics.json

@@ -2,9 +2,10 @@
 
 Grey: static scene (both sessions). Red: removed (present in session 0 only). Green: added (session 1 only).
 Light blue: regions not compared (the other session never had a usable view). Diamonds: camera positions.
+Orange arrows: paired moves from data/semantics.json (if present).
 Usage: python view3d.py
 """
-import json
+import json, os
 import numpy as np
 import plotly.graph_objects as go
 from recon import load, unproject, good_pixels, to_room, camera_centres
@@ -44,6 +45,29 @@ for cl in ch["clusters"]:
         top = X[X[:, 2].argmax()]
         traces.append(go.Scatter3d(x=[top[0]], y=[top[1]], z=[top[2] + 0.12], mode="text", text=[f"c{cl['id']}"],
                                    textfont=dict(color=col, size=11), showlegend=False, hoverinfo="skip"))
+
+if os.path.exists("data/semantics.json"):
+    sem = json.load(open("data/semantics.json"))
+    centre = {cl["id"]: np.array(cl["centre"]) for cl in ch["clusters"]}
+    shown_mv = False
+    conf_colour = {"high": "#ff7f0e", "medium": "#ff7f0e", "low": "#bcbd22"}
+    for m in sem["moves"]:
+        a, b = centre[m["removed"]], centre[m["added"]]
+        col = conf_colour.get(m["confidence"], "#ff7f0e")
+        dash = "solid" if m["confidence"] != "low" else "dash"
+        label = f"c{m['removed']}->c{m['added']}: {m['caption_to'] or m['caption_from']} ({m['distance_m']} m, {m['confidence']})"
+        traces.append(go.Scatter3d(x=[a[0], b[0]], y=[a[1], b[1]], z=[a[2] + 0.05, b[2] + 0.05], mode="lines",
+                                   line=dict(color=col, width=6, dash=dash), name="move", legendgroup="move",
+                                   showlegend=not shown_mv, hovertext=label, hoverinfo="text"))
+        v = b - a
+        n = np.linalg.norm(v) or 1
+        traces.append(go.Cone(x=[b[0]], y=[b[1]], z=[b[2] + 0.05], u=[v[0] / n], v=[v[1] / n], w=[v[2] / n],
+                              sizemode="absolute", sizeref=0.25, anchor="tip", showscale=False,
+                              colorscale=[[0, col], [1, col]], hoverinfo="skip", showlegend=False))
+        mid = (a + b) / 2
+        traces.append(go.Scatter3d(x=[mid[0]], y=[mid[1]], z=[mid[2] + 0.3], mode="text", text=[label],
+                                   textfont=dict(color=col, size=10), showlegend=False, hoverinfo="skip"))
+        shown_mv = True
 
 cams = camera_centres(d)
 for s, col in ((0, "#1f77b4"), (1, "#9467bd")):

@@ -2,3 +2,6 @@ numpy
 scipy
 matplotlib
 plotly
+pillow
+torch
+transformers
