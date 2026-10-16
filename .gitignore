@@ -2,9 +2,7 @@ __pycache__/
 .venv/
 .venv312/
 .DS_Store
+.env
 CLAUDE.md
 out/
-.env
-# generated per-pipeline outputs (reproducible from scripts + data/recon_da3.npz)
-data/semantics.json
 data/vlm.json

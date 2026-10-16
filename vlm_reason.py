@@ -3,28 +3,27 @@
 For each removed/added cluster from stage 3:
 
 1. Pick the best frame of the owning session where the cluster is most visible
-   (reuses show_clusters.best_frames with kind=1 = "match" votes).
+   (reuses show_clusters.best_frames).
 2. Project cluster voxels into that frame -> 2D pixel points.
-3. Use SAM 2.1 with those points as a POINT PROMPT (not a box) to get a precise mask
-   of the object the geometry is pointing at. This "reverses the reconstruction":
-   3D voxels -> 2D projection -> SAM mask -> object boundary the VLM can see as one thing.
-4. Save a context crop around the mask with the mask outlined in red and the voxel
-   projection points scattered as red dots.
-5. Call Claude Haiku 4.5 once per cluster to describe what's inside the outline and
-   classify whether this looks like a real change or a reconstruction/alignment artefact.
-6. For each (removed, added) pair whose 3D centres are within D_MAX metres, call Claude
-   again with both crops and ask whether they are the same object, two visually similar
-   but distinct instances, or unrelated.
-7. Greedy pair by VLM confidence * geometric evidence. Residuals stay as removed/added.
-8. Confidence levels combine geometry (see-through votes), VLM confidence, and crop quality.
+3. Use SAM 2.1 with those points as a POINT PROMPT to get a precise object mask
+   ("reversing the reconstruction": 3D voxels -> 2D projection -> 2D object boundary).
+4. Save two crops: a CLEAN crop (sent to the VLM) and an ANNOTATED crop with the mask
+   outlined in red (saved for human inspection only).
+5. Ask Claude Haiku 4.5 to describe the clean crop and classify the change as
+   real_change / alignment_artefact / uncertain.
+6. For each candidate (removed, added) pair where both sides are real_change AND big
+   enough (>= MIN_PAIR_VOXELS voxels) AND within D_MAX_PAIR metres, ask Claude to
+   decide same_object / similar_but_distinct / unrelated.
+7. Greedy pair by vlm_confidence * exp(-distance / D_SCALE). Pairs under MOVE_MIN are
+   tagged as likely alignment noise, not moves.
+8. Haiku composes a short human-readable Markdown report from the structured JSON.
 
-Nothing in the prompts assumes a classroom or any particular object vocabulary -- the VLM
-reads the scene itself. The pipeline works for any room.
+The prompts carry no scene vocabulary -- the pipeline works for any room.
 
 Writes:
-  data/vlm.json          per-cluster descriptions + pair decisions + confidences
-  out/vlm_crops/         per-cluster crops (annotated and raw)
-  out/report.md          human-readable markdown report
+  data/vlm.json          structured output (every claim traces to a cluster id)
+  out/vlm_crops/         per-cluster crops (clean + annotated)
+  out/report.md          human-readable report composed by Haiku
 
 Usage: ANTHROPIC_API_KEY=... python vlm_reason.py
 """
@@ -45,6 +44,8 @@ CROP_CTX = 16               # extra pixels of context around the mask bbox when 
 MAX_POINT_PROMPTS = 8       # how many of the projected voxel points to feed SAM
 MOVE_MIN = 0.30             # metres: below this a "move" is really alignment noise
 PAIR_MIN_CONF = 0.80        # VLM pair confidence floor to even consider
+MIN_PAIR_VOXELS = 40        # cluster must have >= this many voxels to be eligible for pairing
+                            # (small clusters are too ambiguous to confidently attribute a move)
 
 
 # -------------------------------------------------------------------- helpers
@@ -174,6 +175,29 @@ SYS_DESCRIBE = (
     "}"
 )
 
+SYS_REPORT = (
+    "You will see a JSON summary of changes a 3D-vision pipeline detected between two "
+    "photographs of a physical space. Write a short, user-friendly Markdown report that a "
+    "non-technical reader can skim in 15 seconds.\n\n"
+    "Structure:\n"
+    "  # What changed\n"
+    "  (one sentence summarising the main findings)\n\n"
+    "  ## Main changes\n"
+    "  - one bullet per confirmed MOVE: object name, distance, confidence word in parentheses\n"
+    "  - one bullet per singleton REMOVED or ADDED: object name, verdict, confidence\n\n"
+    "  ## Notes\n"
+    "  - one short line summarising any misalignments (same object below the move threshold)\n"
+    "  - one short line summarising any uncertain / similar-but-distinct pairs\n"
+    "  - one short line summarising the count of suppressed small artefacts (do not list each)\n\n"
+    "Rules:\n"
+    "  - Use the object descriptions from the JSON verbatim; do NOT invent names.\n"
+    "  - When two sides of a MOVE have different descriptions, show them joined by ' / '.\n"
+    "  - Translate confidence strings: high -> 'high confidence', medium -> 'medium', low -> 'low'.\n"
+    "  - Keep each bullet to one line. No tables. No code blocks. No crop paths. No cluster IDs.\n"
+    "  - If a section would be empty, omit the heading.\n"
+    "  - Do not add anything that is not in the JSON."
+)
+
 SYS_PAIR = (
     "You will see TWO tight crops from two photographs of the same physical space taken from "
     "different viewpoints. A 3D-geometry step flagged the region in each crop as a candidate "
@@ -212,6 +236,31 @@ def ask_describe(client, crop, verdict):
                                     "significance": "uncertain", "confidence": 0.0, "why": ""}
     parsed["_tokens"] = {"in": msg.usage.input_tokens, "out": msg.usage.output_tokens}
     return parsed
+
+
+def write_llm_report(client, out):
+    """One Haiku call that composes a short Markdown report from the structured findings."""
+    def trim_desc(x, k=("description", "centre", "confidence")):
+        return {k_: x.get(k_) for k_ in k if k_ in x}
+    summary = {
+        "moves": [{"from": trim_desc(m["from_"]), "to": trim_desc(m["to"]),
+                   "distance_m": m["distance_m"], "confidence": m["confidence"],
+                   "pair_why": m.get("pair_why")} for m in out["moves"]],
+        "misalignments": [{"from": trim_desc(m["from_"]), "to": trim_desc(m["to"]),
+                           "distance_m": m["distance_m"]} for m in out.get("misalignments", [])],
+        "uncertain_pairs": [{"from": trim_desc(p["from_"]), "to": trim_desc(p["to"]),
+                             "distance_m": p["distance_m"]} for p in out.get("uncertain_pairs", [])],
+        "singletons": [{"verdict": s["verdict"], **trim_desc(s)} for s in out["singletons"]],
+        "artefacts_count": len(out.get("artefacts", [])),
+    }
+    msg = client.messages.create(
+        model=MODEL, max_tokens=800,
+        system=[{"type": "text", "text": SYS_REPORT,
+                 "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": json.dumps(summary, indent=1)},
+        ]}])
+    return msg.content[0].text, msg.usage
 
 
 def ask_pair(client, crop_a, crop_b, dist_m):
@@ -314,11 +363,15 @@ if __name__ == "__main__":
         time.sleep(0.2)
 
     # ---------- Step 3: VLM pair asks ----------
-    # Only ask about pairs where BOTH sides were flagged real_change by the describe step.
-    # Dropping 'alignment_artefact' is obvious; also drop 'uncertain' because those crops
-    # were too small/blurry for the VLM to describe reliably -- it will invent matches.
+    # Only ask about pairs where BOTH sides are:
+    #   - flagged real_change by the describe step (not alignment_artefact / uncertain), AND
+    #   - at least MIN_PAIR_VOXELS big (small clusters are too ambiguous for pairing).
+    clusters_by_id = {c["id"]: c for c in clusters}
     def eligible(cid):
-        return descriptions.get(cid, {}).get("significance") == "real_change"
+        if descriptions.get(cid, {}).get("significance") != "real_change":
+            return False
+        c = clusters_by_id.get(cid)
+        return c is not None and c["n_voxels"] >= MIN_PAIR_VOXELS
     print("\ncalling Claude Haiku on candidate pairs...", flush=True)
     removed = [c for c in clusters if c["verdict"] == "removed" and c["id"] in crops and eligible(c["id"])]
     added   = [c for c in clusters if c["verdict"] == "added"   and c["id"] in crops and eligible(c["id"])]
@@ -437,62 +490,21 @@ if __name__ == "__main__":
           f"{len(out['singletons'])} singletons, {len(out['artefacts'])} artefacts flagged by VLM)")
     print(f"API usage: {tok_in} input tokens, {tok_out} output tokens")
 
-    # ---------- Step 6: markdown report ----------
-    BADGE = {"high": "**[HIGH]**", "medium": "**[MED]**", "low": "**[LOW]**"}
-    lines = ["# What changed in the room — report (geometry + VLM reasoning)\n"]
-    lines.append("Pipeline: Depth Anything 3 shared map -> SuperMap voxel visibility diff "
-                 "(stage 3) -> SAM point-prompt masks of each flagged region -> Claude Haiku 4.5 "
-                 "describes the object and judges whether each change is meaningful; "
-                 "same-object pair decisions on candidate moves.\n")
-    lines.append(f"Totals: **{len(out['moves'])} move(s), {len(out['singletons'])} singleton(s), "
-                 f"{len(out['artefacts'])} suppressed as alignment artefact(s)**.\n")
-
-    lines.append("## Findings")
-    for i, m in enumerate(out["moves"], 1):
-        f, t = m["from_"], m["to"]
-        f_desc, t_desc = f["description"] or "?", t["description"] or "?"
-        label = f_desc if f_desc.lower() == t_desc.lower() else f"{f_desc}  ⇄  {t_desc}"
-        lines.append(f"\n### M{i} {BADGE.get(m['confidence'], BADGE['medium'])} Moved: "
-                     f"{label}  —  {m['distance_m']} m")
-        lines.append(f"- From {tuple(round(x,2) for x in f['centre'])} to "
-                     f"{tuple(round(x,2) for x in t['centre'])}")
-        lines.append(f"- VLM: same object (conf {m['pair_confidence']:.2f}) — {m['pair_why']}")
-        lines.append(f"- From-crop: `{f['crop']}` · To-crop: `{t['crop']}`")
-        lines.append(f"- Geometry: {f['see_through']}/{f['in_view']} empty-votes (from), "
-                     f"{t['see_through']}/{t['in_view']} empty-votes (to)")
-
-    if out["misalignments"]:
-        lines.append("\n## Likely alignment / no-move pairs (same object, below MOVE_MIN)")
-        for i, m in enumerate(out["misalignments"], 1):
-            f, t = m["from_"], m["to"]
-            lines.append(f"\n### A{i} {BADGE['low']} {f['description']} <-> {t['description']}  —  {m['distance_m']} m")
-            lines.append(f"- VLM pair: same object (conf {m['pair_confidence']:.2f}) — {m['pair_why']}")
-            lines.append(f"- Note: {m.get('note','')}")
-            lines.append(f"- Crops: `{f['crop']}` · `{t['crop']}`")
-
-    if out["uncertain_pairs"]:
-        lines.append("\n## Possible same object (uncertain, VLM called similar_but_distinct)")
-        for i, p in enumerate(out["uncertain_pairs"], 1):
-            f, t = p["from_"], p["to"]
-            lines.append(f"\n### U{i} {BADGE['low']} {f['description']} <-> {t['description']}  —  {p['distance_m']} m")
-            lines.append(f"- VLM pair: similar_but_distinct (conf {p['pair_confidence']:.2f}) — {p['pair_why']}")
-            lines.append(f"- Crops: `{f['crop']}` · `{t['crop']}`")
-
-    rank = {"high": 0, "medium": 1, "low": 2}
-    for lab, group in (("Removed/Added", out["singletons"]), ("Suppressed artefacts", out["artefacts"])):
-        if not group:
-            continue
-        lines.append(f"\n## {lab}")
-        for i, r in enumerate(sorted(group, key=lambda r: rank.get(r["confidence"], 1)), 1):
-            lines.append(f"\n### {r['verdict'].upper()}  {BADGE.get(r['confidence'], BADGE['medium'])}  "
-                         f"{r['description']}")
-            lines.append(f"- At {tuple(round(x,2) for x in r['centre'])}, volume {r['volume_l']} L")
-            lines.append(f"- Crop: `{r['crop']}`")
-            lines.append(f"- Geometry: {r['see_through']}/{r['in_view']} empty-votes")
-            lines.append(f"- VLM: {r['significance']} (conf {r['vlm_confidence']:.2f}) — {r['vlm_why']}")
-            if r["reasons"]:
-                lines.append(f"- Notes: {', '.join(r['reasons'])}")
-
+    # ---------- Step 6: LLM-written final report ----------
+    print("\ncomposing final report with Claude Haiku...", flush=True)
+    try:
+        report_md, usage = write_llm_report(client, out)
+        tok_in += usage.input_tokens; tok_out += usage.output_tokens
+        total = f"\n\nTotal API usage: {tok_in} input tokens, {tok_out} output tokens."
+    except Exception as e:
+        print(f"report composition failed ({e}); writing a minimal placeholder")
+        report_md = (f"# What changed\n\n{len(out['moves'])} move(s), "
+                     f"{len(out['singletons'])} singleton(s), "
+                     f"{len(out.get('misalignments', []))} misalignment(s), "
+                     f"{len(out['artefacts'])} suppressed artefact(s). "
+                     f"See data/vlm.json for details.")
+        total = ""
     with open("out/report.md", "w") as f:
-        f.write("\n".join(lines) + "\n")
-    print(f"wrote out/report.md ({len(lines)} lines)")
+        f.write(report_md.rstrip() + "\n")
+    print(f"wrote out/report.md ({len(report_md.splitlines())} lines)")
+    print(total.strip() if total else f"API usage: {tok_in} input tokens, {tok_out} output tokens")
