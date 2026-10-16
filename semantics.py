@@ -38,7 +38,11 @@ MOVE_MIN = 0.30           # metres: below this a "move" is just alignment noise
 
 
 def pick_device():
-    return torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
 
 
 def project_box(d, X, i):

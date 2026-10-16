@@ -49,7 +49,11 @@ PAIR_MIN_CONF = 0.80        # VLM pair confidence floor to even consider
 
 # -------------------------------------------------------------------- helpers
 def pick_device():
-    return torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
 
 
 def to_f32(x, device):

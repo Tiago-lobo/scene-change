@@ -52,9 +52,15 @@ Open `out/report.md` for the full human-readable report, `out/changes_3d_vlm.htm
 
 ## How to run
 
-### Requirements
+### Quickest path — Google Colab
 
-- Python 3.12 and the packages in `requirements.txt` (`pip install -r requirements.txt`). PyTorch is used in CPU/MPS/CUDA modes depending on what the machine has.
+Open `notebooks/run_pipeline_colab.ipynb` in Colab and run the cells top to bottom. The notebook installs dependencies, points at a folder you provide (via Drive mount, upload, or GitHub clone), runs stages 2-4 against the sample `data/recon_da3.npz`, and shows the report, the interactive 3D view, and the walkthrough slides inline. A GPU runtime isn't required.
+
+### Local run
+
+#### Requirements
+
+- Python 3.12 and the packages in `requirements.txt` (`pip install -r requirements.txt`). PyTorch is used in CPU, MPS, or CUDA mode depending on what the machine has.
 - A Kaggle account (or any machine with ~16 GB VRAM) to run stage 1 once. The other stages run on a laptop.
 - For the primary semantics path, an Anthropic API key exported as `ANTHROPIC_API_KEY`. For the offline fallback, no key is needed.
 
