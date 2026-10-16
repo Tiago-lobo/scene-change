@@ -27,7 +27,7 @@ Running the pipeline on the included sample (two 20-second iPhone videos of a cl
 > - Desktop computer monitor setup and black mounted camera are closely positioned but may represent different objects rather than movement.
 > - 5 small artefacts suppressed from analysis.
 
-*Haiku 4.5 is the cheapest VLM in the Anthropic API and the only one that stayed inside what I could run end-to-end for free. Its naming is sometimes imaginative, so the blue cube is not actually a Swarovski box, but the move / add / remove / artefact decisions it makes on top of the geometry are consistent. Swapping Haiku for Sonnet or Opus, or for a model fine-tuned on object shapes, would clean up the labels without changing anything else in the pipeline.*
+*Haiku 4.5 is the cheapest VLM in the Anthropic API and the only one that stayed inside what I could run end-to-end for free. Its naming is sometimes imaginative, so the blue cube is not actually a Swarovski box, but the move / add / remove / artefact decisions it makes on top of the geometry are consistent. Swapping Haiku for Sonnet or Opus, or for a model fine-tuned on object shapes, would probably clean up the labels without changing anything else in the pipeline.*
 
 Open `out/changes_3d_vlm.html` in a browser to spin the scene around. `data/vlm.json` is the structured record every claim traces back to.
 
@@ -147,8 +147,7 @@ showcase/                 7 PNGs used in this README
 
 ## AI disclosure
 
-I only learned about this challenge the day before the deadline, so I worked on it alongside Claude Code the whole way through. Claude did most of the heavy lifting on the implementation side, writing the scripts, running experiments against the data, surfacing the output when I needed to see it, and suggesting approaches (SuperMap, Depth Anything 3, the Grounding DINO exploration, the final geometry-first-then-VLM architecture) when I asked for direction. I made the architectural calls, read each stage's output, and decided when to change course or drop an approach that wasn't paying off. The design and the evaluation are mine, and a lot of the code was written in collaboration. Being honest about this feels right.
-
+I learned about this challenge the day before the deadline, so I relied on CLaude to do a lot of the heavy lifting on the implementation side, writing the scripts, running experiments against the data, and suggesting approaches (Depth Anything 3, the Grounding DINO exploration, the final geometry-first-then-VLM architecture) when I asked for direction. Making the decisions on when to change approaches in the design almost feels like the classic exploration vs exploitation problem. When LLMs can write code as fast as they do, it is easy to fall into the trap of letting them run wild in their endeavours. I tried my best to work iteratively and understand each result before moving forward, leaving a lot of the evaluation to myself. I feel like more time spent on specifying the problem to the AI and defining my own evaluation strategies in it through .md files would result in a much more efficient workflow, so this is something I'll try to improve in future iterations.
 ## A closing note
 
-These were an intense ~30 hours. First time with phone-video 3D reconstruction, first time with Depth Anything, first time wiring SAM point prompts and a VLM into a pipeline, first time really pushing Claude Code as a coding partner. I'm proud of where I landed, a working, honest pipeline I can explain end to end, and surprised at how much ground was possible to cover in a day. Definitely making more of these.
+These were an intense ~25 hours. I'm proud of the results I obtained, given the amount of new tools and concepts I had to cover in such a short period of time. It feels amazing to arrive at something that works. I can still see all the potential improvements I couldn't implement in time, but surely will tackle during the next few weeks.
