@@ -27,6 +27,8 @@ Running the pipeline on the included sample (two 20-second iPhone videos of a cl
 > - Desktop computer monitor setup and black mounted camera are closely positioned but may represent different objects rather than movement.
 > - 5 small artefacts suppressed from analysis.
 
+*Haiku 4.5 is the cheapest VLM in the Anthropic API and the only one that stayed inside what I could run end-to-end for free. Its naming is sometimes imaginative — the blue cube is not actually a Swarovski box — but the move / add / remove / artefact decisions it makes on top of the geometry are consistent. Swapping Haiku for Sonnet or Opus, or for a model fine-tuned on object shapes, would clean up the labels without changing anything else in the pipeline.*
+
 Open `out/changes_3d_vlm.html` in a browser to spin the scene around; `data/vlm.json` is the structured record every claim traces back to.
 
 ---
@@ -65,7 +67,7 @@ Any pair of videos of the same room from different viewpoints. The sample is 46 
 
 ### 2. Shared 3D reconstruction
 
-![Pooled point cloud, top-down and side](showcase/02_shared_map.png)
+![Pooled point cloud of the classroom](showcase/preview.webp)
 
 Depth Anything 3 (metric variant) runs on all keyframes in a single pass and returns per-pixel depth and camera pose, in one shared metric coordinate frame. We fit the floor plane, snap the walls to the x/y axes, and place the origin at the floor corner so everything after this is in positive-metre coordinates.
 
@@ -140,3 +142,15 @@ showcase/                 7 PNGs used in this README
 - **SAM 2.1** (Meta) — pixel-exact object masks from point/box prompts.
 - **SuperMap** (Zhao et al., arXiv 2608.22896) — the three-state visibility test for change detection.
 - **Claude Haiku 4.5** (Anthropic) — vision-language reasoning in stage 4.
+
+---
+
+## AI disclosure
+
+I only learned about this challenge the day before the deadline, so I worked on it alongside Claude Code the whole way through. Claude did most of the heavy lifting on the implementation side — writing the scripts, running experiments against the data, surfacing the output when I needed to see it, and suggesting approaches (SuperMap, Depth Anything 3, the Grounding DINO exploration, the final geometry-first-then-VLM architecture) when I asked for direction. I made the architectural calls, read each stage's output, and decided when to change course or drop an approach that wasn't paying off. The design and the evaluation are mine; a lot of the code was written in collaboration. Being honest about this feels right.
+
+## A closing note
+
+These were an intense ~30 hours. First time with phone-video 3D reconstruction, first time with Depth Anything, first time wiring SAM point prompts and a VLM into a pipeline, first time really pushing Claude Code as a coding partner. I'm proud of where I landed — a working, honest pipeline I can explain end to end — and surprised at how much ground was possible to cover in a day. Definitely making more of these.
+
+— Tiago
